@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LEOBIRD AI - Tactical HUD with Range & Bearing</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; background: #0b0f19; color: #00ffcc; padding: 10px; margin: 0; }
+        #video-container { position: relative; display: inline-block; width: 100%; max-width: 600px; }
+        video, canvas { width: 100%; height: auto; border-radius: 10px; border: 2px solid #00ffcc; position: absolute; top: 0; left: 0; }
+        video { position: relative; }
+        button { background: #00ffcc; color: #000; border: none; padding: 12px 24px; font-size: 16px; font-weight: bold; border-radius: 5px; margin-top: 15px; cursor: pointer; }
+        #output { margin-top: 15px; font-family: monospace; background: #112222; padding: 10px; border-radius: 5px; text-align: left; max-height: 150px; overflow-y: auto; font-size: 14px; border: 1px solid #00ffcc; }
+    </style>
+</head>
+<body>
+
+    <h2>LEOBIRD AI - Tactical HUD (Range & Bearing)</h2>
+    <div id="video-container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+    </div>
+    <br>
+    <button onclick="startTacticalSystem()">Start Tactical HUD</button>
+    <div id="output">Status: Loading AI & Compass Sensors...</div>
+
+    <script>
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const outputDiv = document.getElementById('output');
+        let model = undefined;
+        let currentHeading = 0; // फोन की कंपास दिशा (Bearing)
+
+        // फोन का कंपास सेंसर चालू करना (Bearing के लिए)
+        if (window.DeviceOrientationEvent) {
+            window.addEventListener('deviceorientation', (event) => {
+                if (event.alpha !== null) {
+                    currentHeading = Math.round(event.alpha); // 0 से 360 डिग्री
+                }
+            }, true);
+        }
+
+        // कैमरा चालू करना (बैक कैमरा)
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+            .then(stream => {
+                video.srcObject = stream;
+                outputDiv.innerText = "Status: Camera & Compass Ready. Click 'Start Tactical HUD'.";
+            })
+            .catch(err => {
+                outputDiv.innerText = "Camera Error: " + err;
+            });
+
+        cocoSsd.load().then(loadedModel => {
+            model = loadedModel;
+            outputDiv.innerText = "Status: AI & Bearing Matrix Loaded.";
+        });
+
+        async function startTacticalSystem() {
+            if (!model) {
+                alert("Model is still loading!");
+                return;
+            }
+            // मोबाइल पर कंपास परमिशन के लिए
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission().catch(console.error);
+            }
+            outputDiv.innerText = "Status: Tactical HUD Active. Scanning...";
+            detectFrame();
+        }
+
+        // दूरी का अंदाज़ा लगाने वाला फंक्शन
+        function estimateDistance(boxHeight, frameHeight) {
+            if (boxHeight === 0) return "Unknown";
+            let ratio = boxHeight / frameHeight;
+            let estimatedMeters = Math.round(15 / ratio);
+            
+            if (estimatedMeters > 500) return ">500m";
+            if (estimatedMeters < 5) return "~5m";
+            return estimatedMeters + "m";
+        }
+
+        // डिग्री से दिशा (N, NE, E, SE, S, SW, W, NW) निकालने का फंक्शन
+        function getCompassDirection(heading) {
+            const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+            let index = Math.round((heading % 360) / 45);
+            return directions[index % 8];
+        }
+
+        async function detectFrame() {
+            if (video.readyState === 4) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+
+                const predictions = await model.detect(video);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                let detectedSummary = [];
+                let bearingStr = `${currentHeading}° (${getCompassDirection(currentHeading)})`;
+
+                predictions.forEach(prediction => {
+                    // 75% एक्यूरेसी फिल्टर ताकि फालतू चीजें न आएं
+                    if (prediction.score >= 0.75) {
+                        let className = prediction.class.toLowerCase();
+                        let tacticalName = "";
+
+                        if (className === 'person') {
+                            tacticalName = 'HUMAN';
+                        } else if (className === 'truck') {
+                            tacticalName = '2.5 TON / ALS TRUCK';
+                        } else if (className === 'car') {
+                            tacticalName = 'MARUTI GYPSY / CAR';
+                        } else if (className === 'motorbike') {
+                            tacticalName = 'BIKE';
+                        } else if (className === 'airplane' || className === 'bird') {
+                            tacticalName = 'DRONE / AIRCRAFT';
+                        } else if (className === 'bus' || className === 'train') {
+                            tacticalName = 'TANK / HEAVY VEHICLE';
+                        } else if (className === 'sports ball' || className === 'fire hydrant') {
+                            tacticalName = 'ARTILLERY / EQUIPMENT';
+                        }
+
+                        if (tacticalName !== "") {
+                            const [x, y, width, height] = prediction.bbox;
+                            let distanceStr = estimateDistance(height, canvas.height);
+
+                            // स्क्रीन पर दिखने वाला टेक्स्ट (नाम + दूरी + बेयरिंग)
+                            let text = `${tacticalName} | Dist: ${distanceStr} | Brg: ${bearingStr}`;
+                            
+                            detectedSummary.push(`${tacticalName} (${distanceStr}, ${bearingStr})`);
+
+                            // ग्रीन बॉक्स और टेक्स्ट
+                            ctx.strokeStyle = "#00ffcc";
+                            ctx.lineWidth = 4;
+                            ctx.strokeRect(x, y, width, height);
+
+                            ctx.fillStyle = "#00ffcc";
+                            ctx.font = "bold 13px sans-serif";
+                            ctx.fillText(text, x, y > 15 ? y - 8 : 10);
+                        }
+                    }
+                });
+
+                if (detectedSummary.length > 0) {
+                    outputDiv.innerText = "LOCKED: " + detectedSummary.join(" | ");
+                } else {
+                    outputDiv.innerText = `Scanning sector... Compass Heading: ${bearingStr}`;
+                }
+            }
+            requestAnimationFrame(detectFrame);
+        }
+    </script>
+</body>
+</html>
