@@ -17,8 +17,8 @@ class VideoProcessor(VideoProcessorBase):
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         
-        # YOLO Prediction
-        results = model(img)
+        # YOLO Prediction with 55% Confidence Threshold (Faltu detections blocked!)
+        results = model(img, conf=0.55)
         res_plotted = results[0].plot()
         
         return av.VideoFrame.from_ndarray(res_plotted, format="bgr24")
@@ -29,5 +29,3 @@ webrtc_streamer(
     video_processor_factory=VideoProcessor,
     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
-
-    
